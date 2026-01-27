@@ -59,7 +59,10 @@ id<MTLAccelerationStructure> create_blas(
 	geom_desc.vertexBuffer = vertex_buffer;
 	geom_desc.vertexBufferOffset = desc.vertex_offset;
 	geom_desc.vertexStride = desc.vertex_stride;
-	geom_desc.vertexFormat = MTLAttributeFormatFloat3;
+	
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		geom_desc.vertexFormat = MTLAttributeFormatFloat3;
+	}
 	
 	if (index_buffer) {
 		geom_desc.indexBuffer = index_buffer;
@@ -109,12 +112,12 @@ id<MTLAccelerationStructure> create_blas(
 	return accel;
 }
 
-API_AVAILABLE(macos(11.0), ios(14.0))
+API_AVAILABLE(macos(12.0), ios(15.0))
 id<MTLAccelerationStructure> create_tlas(
 	id<MTLDevice> device,
 	id<MTLCommandQueue> queue,
 	const MDAccelerationStructureTLASDescriptor &desc,
-	const Vector<id<MTLAccelerationStructure>> &blas_array,
+	NSArray<id<MTLAccelerationStructure>> *blas_array,
 	id<MTLBuffer> *out_instance_buffer,
 	id<MTLBuffer> *out_scratch_buffer
 ) {
@@ -148,13 +151,15 @@ id<MTLAccelerationStructure> create_tlas(
 	// Create instance acceleration structure descriptor (TLAS)
 	MTLInstanceAccelerationStructureDescriptor *accel_desc =
 		[[MTLInstanceAccelerationStructureDescriptor alloc] init];
-	accel_desc.instancedAccelerationStructures =
-		[NSArray arrayWithObjects:blas_array.ptr() count:blas_array.size()];
+	accel_desc.instancedAccelerationStructures = blas_array;
 	accel_desc.instanceCount = instance_count;
 	accel_desc.instanceDescriptorBuffer = instance_buffer;
 	accel_desc.instanceDescriptorBufferOffset = 0;
 	accel_desc.instanceDescriptorStride = instance_stride;
-	accel_desc.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
+	
+	if (@available(macOS 12.0, iOS 15.0, *)) {
+		accel_desc.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
+	}
 	
 	// Get sizes
 	MTLAccelerationStructureSizes sizes =
