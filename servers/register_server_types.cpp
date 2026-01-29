@@ -33,6 +33,11 @@
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 
+#if defined(MACOS_ENABLED) || defined(IOS_ENABLED)
+#include "drivers/metal/metal_neural_singleton.h"
+#include "drivers/metal/metal_neural_mlp.h"
+#endif
+
 #include "audio/audio_effect.h"
 #include "audio/audio_server.h"
 #include "audio/audio_stream.h"
@@ -135,6 +140,10 @@ static bool has_server_feature_callback(const String &p_feature) {
 }
 
 static MovieWriterPNGWAV *writer_pngwav = nullptr;
+
+#if defined(MACOS_ENABLED) || defined(IOS_ENABLED)
+static MetalNeuralSingleton *metal_neural_singleton = nullptr;
+#endif
 
 void register_server_types() {
 	OS::get_singleton()->benchmark_begin_measure("Servers", "Register Extensions");
@@ -363,6 +372,13 @@ void register_server_types() {
 		MovieWriter::add_writer(writer_pngwav);
 	}
 
+#if defined(MACOS_ENABLED) || defined(IOS_ENABLED)
+	// Metal 4 Neural support
+	GDREGISTER_CLASS(MetalNeuralSingleton);
+	GDREGISTER_CLASS(MetalNeuralMLP);
+	metal_neural_singleton = memnew(MetalNeuralSingleton);
+#endif
+
 	OS::get_singleton()->benchmark_end_measure("Servers", "Register Extensions");
 }
 
@@ -374,6 +390,12 @@ void unregister_server_types() {
 	if constexpr (GD_IS_CLASS_ENABLED(MovieWriterPNGWAV)) {
 		memdelete(writer_pngwav);
 	}
+
+#if defined(MACOS_ENABLED) || defined(IOS_ENABLED)
+	if (metal_neural_singleton) {
+		memdelete(metal_neural_singleton);
+	}
+#endif
 
 	OS::get_singleton()->benchmark_end_measure("Servers", "Unregister Extensions");
 }
@@ -401,6 +423,10 @@ void register_server_singletons() {
 #ifndef XR_DISABLED
 	Engine::get_singleton()->add_singleton(Engine::Singleton("XRServer", XRServer::get_singleton(), "XRServer"));
 #endif // XR_DISABLED
+
+#if defined(MACOS_ENABLED) || defined(IOS_ENABLED)
+	Engine::get_singleton()->add_singleton(Engine::Singleton("MetalNeural", MetalNeuralSingleton::get_singleton(), "MetalNeuralSingleton"));
+#endif
 
 	OS::get_singleton()->benchmark_end_measure("Servers", "Register Singletons");
 }

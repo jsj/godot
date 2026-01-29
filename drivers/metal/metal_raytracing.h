@@ -54,6 +54,9 @@ public:
 	id<MTLBuffer> vertex_buffer = nil;
 	id<MTLBuffer> index_buffer = nil;
 	uint32_t triangle_count = 0;
+	uint32_t vertex_count = 0;
+	uint32_t vertex_stride = 12;
+	uint64_t vertex_offset = 0;
 	
 	// For TLAS
 	id<MTLBuffer> instance_buffer = nil;

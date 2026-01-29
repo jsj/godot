@@ -32,6 +32,11 @@
 
 #if defined(METAL_ENABLED) && !defined(VISIONOS_ENABLED)
 #define METAL_MFXTEMPORAL_ENABLED
+// Metal 4 features require macOS 26+ / iOS 26+ SDK
+// TODO: Enable these when building with Xcode 26+ / macOS 26 SDK
+// These use MTLFXTemporalDenoisedScaler and MTLFXFrameInterpolator APIs
+// #define METAL4_MFXDENOISER_ENABLED
+// #define METAL4_MFXFRAMEINTERP_ENABLED
 #endif
 
 #ifdef METAL_ENABLED
@@ -41,28 +46,34 @@
 #include "core/templates/paged_allocator.h"
 #include "servers/rendering/renderer_scene_render.h"
 
-namespace MTLFX {
-class SpatialScalerBase;
-class TemporalScalerBase;
-} //namespace MTLFX
+#ifdef __OBJC__
+@protocol MTLFXSpatialScaler;
+@protocol MTLFXTemporalScaler;
+@protocol MTLFXTemporalDenoisedScaler;
+@protocol MTLFXFrameInterpolator;
+#endif
 
 namespace RendererRD {
 
 struct MFXSpatialContext {
-	MTLFX::SpatialScalerBase *scaler = nullptr;
+#ifdef __OBJC__
+	id<MTLFXSpatialScaler> scaler = nullptr;
+#else
+	void *scaler = nullptr;
+#endif
 	MFXSpatialContext() = default;
 	~MFXSpatialContext();
 };
 
 class MFXSpatialEffect : public SpatialUpscaler {
 	struct CallbackArgs {
-		MFXSpatialEffect *owner = nullptr;
-		MTLFX::SpatialScalerBase *scaler = nullptr;
+		MFXSpatialEffect *owner;
 		RDD::TextureID src;
 		RDD::TextureID dst;
+		MFXSpatialContext ctx;
 
-		CallbackArgs(MFXSpatialEffect *p_owner, RDD::TextureID p_src, RDD::TextureID p_dst, const MFXSpatialContext &p_ctx) :
-				owner(p_owner), scaler(p_ctx.scaler), src(p_src), dst(p_dst) {}
+		CallbackArgs(MFXSpatialEffect *p_owner, RDD::TextureID p_src, RDD::TextureID p_dst, MFXSpatialContext p_ctx) :
+				owner(p_owner), src(p_src), dst(p_dst), ctx(p_ctx) {}
 
 		static void free(CallbackArgs **p_args) {
 			(*p_args)->owner->args_allocator.free(*p_args);
@@ -94,21 +105,25 @@ public:
 #ifdef METAL_MFXTEMPORAL_ENABLED
 
 struct MFXTemporalContext {
-	MTLFX::TemporalScalerBase *scaler = nullptr;
+#ifdef __OBJC__
+	id<MTLFXTemporalScaler> scaler = nullptr;
+#else
+	void *scaler = nullptr;
+#endif
 	MFXTemporalContext() = default;
 	~MFXTemporalContext();
 };
 
 class MFXTemporalEffect {
 	struct CallbackArgs {
-		MFXTemporalEffect *owner = nullptr;
-		MTLFX::TemporalScalerBase *scaler = nullptr;
+		MFXTemporalEffect *owner;
 		RDD::TextureID src;
 		RDD::TextureID depth;
 		RDD::TextureID motion;
 		RDD::TextureID exposure;
 		Vector2 jitter_offset;
 		RDD::TextureID dst;
+		MFXTemporalContext ctx;
 		bool reset = false;
 
 		CallbackArgs(
@@ -119,16 +134,16 @@ class MFXTemporalEffect {
 				RDD::TextureID p_exposure,
 				Vector2 p_jitter_offset,
 				RDD::TextureID p_dst,
-				const MFXTemporalContext &p_ctx,
+				MFXTemporalContext p_ctx,
 				bool p_reset) :
 				owner(p_owner),
-				scaler(p_ctx.scaler),
 				src(p_src),
 				depth(p_depth),
 				motion(p_motion),
 				exposure(p_exposure),
 				jitter_offset(p_jitter_offset),
 				dst(p_dst),
+				ctx(p_ctx),
 				reset(p_reset) {}
 
 		static void free(CallbackArgs **p_args) {
@@ -172,6 +187,194 @@ public:
 };
 
 #endif
+
+#ifdef METAL4_MFXDENOISER_ENABLED
+
+/// MetalFX Temporal Denoised Scaler (Metal 4 / macOS 26+)
+/// Combines denoising with temporal upscaling for ray-traced content
+struct MFXDenoisedContext {
+#ifdef __OBJC__
+	id<MTLFXTemporalDenoisedScaler> scaler = nullptr;
+#else
+	void *scaler = nullptr;
+#endif
+	MFXDenoisedContext() = default;
+	~MFXDenoisedContext();
+};
+
+class MFXDenoisedEffect {
+	struct CallbackArgs {
+		MFXDenoisedEffect *owner;
+		RDD::TextureID color;
+		RDD::TextureID depth;
+		RDD::TextureID motion;
+		RDD::TextureID normal;
+		RDD::TextureID albedo;
+		RDD::TextureID roughness;
+		RDD::TextureID dst;
+		MFXDenoisedContext ctx;
+		Vector2 jitter_offset;
+		Transform3D world_to_view;
+		Projection view_to_clip;
+		bool reset = false;
+
+		CallbackArgs(
+				MFXDenoisedEffect *p_owner,
+				RDD::TextureID p_color,
+				RDD::TextureID p_depth,
+				RDD::TextureID p_motion,
+				RDD::TextureID p_normal,
+				RDD::TextureID p_albedo,
+				RDD::TextureID p_roughness,
+				RDD::TextureID p_dst,
+				MFXDenoisedContext p_ctx,
+				Vector2 p_jitter,
+				const Transform3D &p_world_to_view,
+				const Projection &p_view_to_clip,
+				bool p_reset) :
+				owner(p_owner),
+				color(p_color),
+				depth(p_depth),
+				motion(p_motion),
+				normal(p_normal),
+				albedo(p_albedo),
+				roughness(p_roughness),
+				dst(p_dst),
+				ctx(p_ctx),
+				jitter_offset(p_jitter),
+				world_to_view(p_world_to_view),
+				view_to_clip(p_view_to_clip),
+				reset(p_reset) {}
+
+		static void free(CallbackArgs **p_args) {
+			(*p_args)->owner->args_allocator.free(*p_args);
+			*p_args = nullptr;
+		}
+	};
+
+	PagedAllocator<CallbackArgs, true, 16> args_allocator;
+
+	static void callback(RDD *p_driver, RDD::CommandBufferID p_command_buffer, CallbackArgs *p_userdata);
+
+public:
+	MFXDenoisedEffect();
+	~MFXDenoisedEffect();
+
+	static bool is_supported();
+
+	struct CreateParams {
+		Vector2i input_size;
+		Vector2i output_size;
+		RD::DataFormat color_format;
+		RD::DataFormat depth_format;
+		RD::DataFormat motion_format;
+		RD::DataFormat normal_format;
+		RD::DataFormat albedo_format;
+		RD::DataFormat roughness_format;
+		RD::DataFormat output_format;
+		Vector2 motion_vector_scale;
+	};
+
+	MFXDenoisedContext *create_context(CreateParams p_params) const;
+
+	struct Params {
+		RID color;           // Noisy ray traced color
+		RID depth;           // Depth buffer
+		RID motion;          // Motion vectors
+		RID normal;          // World-space normals
+		RID diffuse_albedo;  // Diffuse albedo (for denoising)
+		RID roughness;       // Roughness
+		RID dst;             // Output
+		Vector2 jitter_offset;
+		Transform3D world_to_view;
+		Projection view_to_clip;
+		bool reset = false;
+	};
+
+	void process(MFXDenoisedContext *p_ctx, Params p_params);
+};
+
+#endif // METAL4_MFXDENOISER_ENABLED
+
+#ifdef METAL4_MFXFRAMEINTERP_ENABLED
+
+/// MetalFX Frame Interpolation (Metal 4 / macOS 26+)
+/// Generates intermediate frames for higher perceived frame rates
+struct MFXFrameInterpContext {
+#ifdef __OBJC__
+	id<MTLFXFrameInterpolator> interpolator = nullptr;
+#else
+	void *interpolator = nullptr;
+#endif
+	MFXFrameInterpContext() = default;
+	~MFXFrameInterpContext();
+};
+
+class MFXFrameInterpEffect {
+	struct CallbackArgs {
+		MFXFrameInterpEffect *owner;
+		RDD::TextureID color_prev;
+		RDD::TextureID color_curr;
+		RDD::TextureID depth;
+		RDD::TextureID motion;
+		RDD::TextureID dst;
+		MFXFrameInterpContext ctx;
+
+		CallbackArgs(
+				MFXFrameInterpEffect *p_owner,
+				RDD::TextureID p_prev,
+				RDD::TextureID p_curr,
+				RDD::TextureID p_depth,
+				RDD::TextureID p_motion,
+				RDD::TextureID p_dst,
+				MFXFrameInterpContext p_ctx) :
+				owner(p_owner),
+				color_prev(p_prev),
+				color_curr(p_curr),
+				depth(p_depth),
+				motion(p_motion),
+				dst(p_dst),
+				ctx(p_ctx) {}
+
+		static void free(CallbackArgs **p_args) {
+			(*p_args)->owner->args_allocator.free(*p_args);
+			*p_args = nullptr;
+		}
+	};
+
+	PagedAllocator<CallbackArgs, true, 16> args_allocator;
+
+	static void callback(RDD *p_driver, RDD::CommandBufferID p_command_buffer, CallbackArgs *p_userdata);
+
+public:
+	MFXFrameInterpEffect();
+	~MFXFrameInterpEffect();
+
+	static bool is_supported();
+
+	struct CreateParams {
+		Vector2i input_size;
+		Vector2i output_size;
+		RD::DataFormat color_format;
+		RD::DataFormat depth_format;
+		RD::DataFormat motion_format;
+		RD::DataFormat output_format;
+	};
+
+	MFXFrameInterpContext *create_context(CreateParams p_params) const;
+
+	struct Params {
+		RID color_previous;  // Previous frame
+		RID color_current;   // Current frame
+		RID depth;           // Current depth
+		RID motion;          // Motion vectors
+		RID dst;             // Interpolated output
+	};
+
+	void process(MFXFrameInterpContext *p_ctx, Params p_params);
+};
+
+#endif // METAL4_MFXFRAMEINTERP_ENABLED
 
 } //namespace RendererRD
 
