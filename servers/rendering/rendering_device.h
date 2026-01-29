@@ -34,7 +34,6 @@
 #include "core/os/condition_variable.h"
 #include "core/os/thread_safe.h"
 #include "core/templates/local_vector.h"
-#include "core/templates/rb_map.h"
 #include "core/templates/rid_owner.h"
 #include "core/variant/typed_array.h"
 #include "servers/display/display_server.h"
@@ -68,7 +67,6 @@ private:
 public:
 	typedef int64_t DrawListID;
 	typedef int64_t ComputeListID;
-	typedef int64_t RaytracingListID;
 
 	typedef void (*InvalidationCallback)(void *);
 
@@ -105,7 +103,6 @@ public:
 		ID_TYPE_VERTEX_FORMAT,
 		ID_TYPE_DRAW_LIST,
 		ID_TYPE_COMPUTE_LIST = 4,
-		ID_TYPE_RAYTRACING_LIST = 5,
 		ID_TYPE_MAX,
 		ID_BASE_SHIFT = 58, // 5 bits for ID types.
 		ID_MASK = (ID_BASE_SHIFT - 1),
@@ -294,9 +291,6 @@ public:
 		CALLBACK_RESOURCE_USAGE_ATTACHMENT_FRAGMENT_SHADING_RATE_READ,
 		CALLBACK_RESOURCE_USAGE_ATTACHMENT_FRAGMENT_DENSITY_MAP_READ,
 		CALLBACK_RESOURCE_USAGE_GENERAL,
-		CALLBACK_RESOURCE_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT,
-		CALLBACK_RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ,
-		CALLBACK_RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ_WRITE,
 		CALLBACK_RESOURCE_USAGE_MAX
 	};
 
@@ -846,7 +840,6 @@ public:
 		BUFFER_CREATION_DEVICE_ADDRESS_BIT = (1 << 0),
 		BUFFER_CREATION_AS_STORAGE_BIT = (1 << 1),
 		BUFFER_CREATION_DYNAMIC_PERSISTENT_BIT = (1 << 2),
-		BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT = (1 << 3),
 	};
 
 	enum StorageBufferUsage {
@@ -868,9 +861,6 @@ public:
 	}
 
 	RID index_array_create(RID p_index_buffer, uint32_t p_index_offset, uint32_t p_index_count);
-
-private:
-	BitField<RDD::BufferUsageBits> _creation_to_usage_bits(BitField<BufferCreationBits> p_creation_bits);
 
 	/****************/
 	/**** SHADER ****/
@@ -1239,17 +1229,6 @@ private:
 
 	RID_Owner<ComputePipeline, true> compute_pipeline_owner;
 
-	struct RaytracingPipeline {
-		RID shader;
-		RDD::ShaderID shader_driver_id;
-		uint32_t shader_layout_hash = 0;
-		Vector<uint32_t> set_formats;
-		RDD::RaytracingPipelineID driver_id;
-		uint32_t push_constant_size = 0;
-	};
-
-	RID_Owner<RaytracingPipeline> raytracing_pipeline_owner;
-
 public:
 	RID render_pipeline_create(RID p_shader, FramebufferFormatID p_framebuffer_format, VertexFormatID p_vertex_format, RenderPrimitive p_render_primitive, const PipelineRasterizationState &p_rasterization_state, const PipelineMultisampleState &p_multisample_state, const PipelineDepthStencilState &p_depth_stencil_state, const PipelineColorBlendState &p_blend_state, BitField<PipelineDynamicStateFlags> p_dynamic_state_flags = 0, uint32_t p_for_render_pass = 0, const Vector<PipelineSpecializationConstant> &p_specialization_constants = Vector<PipelineSpecializationConstant>());
 	bool render_pipeline_is_valid(RID p_pipeline);
@@ -1257,10 +1236,46 @@ public:
 	RID compute_pipeline_create(RID p_shader, const Vector<PipelineSpecializationConstant> &p_specialization_constants = Vector<PipelineSpecializationConstant>());
 	bool compute_pipeline_is_valid(RID p_pipeline);
 
-	RID raytracing_pipeline_create(RID p_shader, const Vector<PipelineSpecializationConstant> &p_specialization_constants = Vector<PipelineSpecializationConstant>());
-	bool raytracing_pipeline_is_valid(RID p_pipeline);
-
 	void update_pipeline_cache(bool p_closing = false);
+
+	/***************************/
+	/**** RAY TRACING (RT) ****/
+	/***************************/
+
+private:
+	struct AccelerationStructure {
+		RDD::AccelerationStructureID driver_id;
+		enum Type { TYPE_BLAS, TYPE_TLAS } type;
+		Vector<RID> referenced_buffers; // Keep buffers alive
+	};
+	RID_Owner<AccelerationStructure, true> accel_structure_owner;
+
+public:
+	// Acceleration structure geometry description for BLAS
+	struct AccelerationStructureGeometry {
+		RID vertex_buffer;
+		uint64_t vertex_offset = 0;
+		uint32_t vertex_count = 0;
+		uint32_t vertex_stride = 12; // sizeof(float) * 3
+		RID index_buffer;
+		uint64_t index_offset = 0;
+		uint32_t index_count = 0;
+		bool index_32bit = true;
+	};
+
+	// Instance description for TLAS
+	struct AccelerationStructureInstance {
+		RID blas;
+		Transform3D transform;
+		uint32_t mask = 0xFF;
+		uint32_t instance_id = 0;
+		uint32_t hit_group_index = 0;
+	};
+
+	RID acceleration_structure_create_blas(const Vector<AccelerationStructureGeometry> &p_geometries);
+	RID acceleration_structure_create_tlas(const Vector<AccelerationStructureInstance> &p_instances);
+	void acceleration_structure_free(RID p_accel);
+	bool acceleration_structure_is_valid(RID p_accel);
 
 private:
 	/****************/
@@ -1279,45 +1294,6 @@ public:
 	int screen_get_pre_rotation_degrees(DisplayServer::WindowID p_screen = DisplayServer::MAIN_WINDOW_ID) const;
 	FramebufferFormatID screen_get_framebuffer_format(DisplayServer::WindowID p_screen = DisplayServer::MAIN_WINDOW_ID) const;
 	Error screen_free(DisplayServer::WindowID p_screen = DisplayServer::MAIN_WINDOW_ID);
-
-private:
-	/********************************/
-	/**** ACCELERATION STRUCTURE ****/
-	/********************************/
-
-	struct InstancesBuffer {
-		Buffer buffer;
-		uint32_t instance_count;
-		Vector<RID> blases;
-	};
-
-	struct AccelerationStructure {
-		RDD::AccelerationStructureID driver_id;
-		RDD::AccelerationStructureType type = RDD::ACCELERATION_STRUCTURE_TYPE_BLAS;
-		RDG::ResourceTracker *draw_tracker = nullptr;
-		Vector<RDG::ResourceTracker *> draw_trackers;
-
-		RID scratch_buffer;
-		RID vertex_array;
-		RID index_array;
-		RID transform_buffer;
-		RID instances_buffer;
-	};
-
-	RID_Owner<InstancesBuffer, true> instances_buffer_owner;
-	RID_Owner<AccelerationStructure> acceleration_structure_owner;
-
-public:
-	enum AccelerationStructureGeometryBits {
-		ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE = (1 << 0),
-		ACCELERATION_STRUCTURE_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION = (1 << 1),
-	};
-
-	RID blas_create(RID p_vertex_array, RID p_index_array, BitField<AccelerationStructureGeometryBits> p_geometry_bits = 0, uint32_t p_position_attribute_location = 0);
-	RID tlas_instances_buffer_create(uint32_t p_instance_count, BitField<BufferCreationBits> p_creation_bits = 0);
-	void tlas_instances_buffer_fill(RID p_buffer, const Vector<RID> &p_blases, VectorView<Transform3D> p_transforms);
-	RID tlas_create(RID p_instances_buffer);
-	Error acceleration_structure_build(RID p_acceleration_structure);
 
 	/*************************/
 	/**** DRAW LISTS (II) ****/
@@ -1462,61 +1438,6 @@ public:
 	void draw_list_end();
 
 private:
-	/**************************/
-	/**** RAYTRACING LISTS ****/
-	/**************************/
-
-	struct RaytracingList {
-		bool active = false;
-		struct SetState {
-			uint32_t pipeline_expected_format = 0;
-			uint32_t uniform_set_format = 0;
-			RDD::UniformSetID uniform_set_driver_id;
-			RID uniform_set;
-			bool bound = false;
-		};
-
-		struct State {
-			SetState sets[MAX_UNIFORM_SETS];
-			uint32_t set_count = 0;
-			RID pipeline;
-			RDD::RaytracingPipelineID pipeline_driver_id;
-			RID pipeline_shader;
-			RDD::ShaderID pipeline_shader_driver_id;
-			uint32_t pipeline_shader_layout_hash = 0;
-			uint8_t push_constant_data[MAX_PUSH_CONSTANT_SIZE] = {};
-			uint32_t push_constant_size = 0;
-			uint32_t trace_count = 0;
-		} state;
-
-#ifdef DEBUG_ENABLED
-		struct Validation {
-			bool active = true; // Means command buffer was not closed, so you can keep adding things.
-			Vector<uint32_t> set_formats;
-			Vector<bool> set_bound;
-			Vector<RID> set_rids;
-			// Last pipeline set values.
-			bool pipeline_active = false;
-			RID pipeline_shader;
-			uint32_t invalid_set_from = 0;
-			uint32_t pipeline_push_constant_size = 0;
-			bool pipeline_push_constant_supplied = false;
-		} validation;
-#endif
-	};
-
-	RaytracingList raytracing_list;
-	RaytracingList::State raytracing_list_barrier_state;
-
-public:
-	RaytracingListID raytracing_list_begin();
-	void raytracing_list_bind_raytracing_pipeline(RaytracingListID p_list, RID p_raytracing_pipeline);
-	void raytracing_list_bind_uniform_set(RaytracingListID p_list, RID p_uniform_set, uint32_t p_index);
-	void raytracing_list_set_push_constant(RaytracingListID p_list, const void *p_data, uint32_t p_data_size);
-	void raytracing_list_trace_rays(RaytracingListID p_list, uint32_t p_width, uint32_t p_height);
-	void raytracing_list_end();
-
-private:
 	/***********************/
 	/**** COMPUTE LISTS ****/
 	/***********************/
@@ -1598,10 +1519,9 @@ private:
 		BinaryMutex operations_mutex;
 	};
 
-	TightLocalVector<TransferWorker *> transfer_worker_pool;
-	uint32_t transfer_worker_pool_size = 0;
+	LocalVector<TransferWorker *> transfer_worker_pool;
 	uint32_t transfer_worker_pool_max_size = 1;
-	TightLocalVector<uint64_t> transfer_worker_operation_used_by_draw;
+	LocalVector<uint64_t> transfer_worker_operation_used_by_draw;
 	LocalVector<uint32_t> transfer_worker_pool_available_list;
 	LocalVector<RDD::TextureBarrier> transfer_worker_pool_texture_barriers;
 	BinaryMutex transfer_worker_pool_mutex;
@@ -1678,8 +1598,6 @@ private:
 		List<UniformSet> uniform_sets_to_dispose_of;
 		List<RenderPipeline> render_pipelines_to_dispose_of;
 		List<ComputePipeline> compute_pipelines_to_dispose_of;
-		List<AccelerationStructure> acceleration_structures_to_dispose_of;
-		List<RaytracingPipeline> raytracing_pipelines_to_dispose_of;
 
 		// Pending asynchronous data transfer for buffers.
 		LocalVector<RDD::BufferID> download_buffer_staging_buffers;
@@ -1896,15 +1814,28 @@ private:
 
 	Error _buffer_update_bind(RID p_buffer, uint32_t p_offset, uint32_t p_size, const Vector<uint8_t> &p_data);
 
-	void _tlas_instances_buffer_fill(RID p_buffer, const TypedArray<RID> &p_blases, const TypedArray<Transform3D> &p_transforms);
-
 	RID _render_pipeline_create(RID p_shader, FramebufferFormatID p_framebuffer_format, VertexFormatID p_vertex_format, RenderPrimitive p_render_primitive, const Ref<RDPipelineRasterizationState> &p_rasterization_state, const Ref<RDPipelineMultisampleState> &p_multisample_state, const Ref<RDPipelineDepthStencilState> &p_depth_stencil_state, const Ref<RDPipelineColorBlendState> &p_blend_state, BitField<PipelineDynamicStateFlags> p_dynamic_state_flags, uint32_t p_for_render_pass, const TypedArray<RDPipelineSpecializationConstant> &p_specialization_constants);
 	RID _compute_pipeline_create(RID p_shader, const TypedArray<RDPipelineSpecializationConstant> &p_specialization_constants);
-	RID _raytracing_pipeline_create(RID p_shader, const TypedArray<RDPipelineSpecializationConstant> &p_specialization_constants);
 
 	void _draw_list_set_push_constant(DrawListID p_list, const Vector<uint8_t> &p_data, uint32_t p_data_size);
 	void _compute_list_set_push_constant(ComputeListID p_list, const Vector<uint8_t> &p_data, uint32_t p_data_size);
-	void _raytracing_list_set_push_constant(RaytracingListID p_list, const Vector<uint8_t> &p_data, uint32_t p_data_size);
+
+	// Ray tracing GDScript bindings
+	RID _acceleration_structure_create_blas(RID p_vertex_buffer, uint32_t p_vertex_count, uint32_t p_vertex_stride = 12);
+	RID _acceleration_structure_create_tlas(const TypedArray<RID> &p_blas_array, const TypedArray<Transform3D> &p_transforms);
+	RID _shader_create_from_msl(const String &p_msl_source, const String &p_entry_point);
+	void _compute_dispatch_rt(RID p_shader, RID p_tlas, RID p_output_texture, uint32_t p_width, uint32_t p_height);
+	void _compute_dispatch_rt_with_resources(RID p_shader, RID p_accel, RID p_output_texture, 
+		const TypedArray<RID> &p_buffers, const TypedArray<RID> &p_textures, uint32_t p_width, uint32_t p_height);
+	void _compute_dispatch_msl(RID p_shader, const TypedArray<RID> &p_textures, uint32_t p_width, uint32_t p_height);
+
+	// MetalFX temporal upscaling
+	RID _metalfx_denoiser_create(uint32_t p_input_width, uint32_t p_input_height, uint32_t p_output_width, uint32_t p_output_height);
+	RID _metalfx_temporal_scaler_create(uint32_t p_input_width, uint32_t p_input_height, uint32_t p_output_width, uint32_t p_output_height);
+	void _metalfx_denoiser_free(RID p_denoiser);
+	void _metalfx_denoise(RID p_denoiser, RID p_color, RID p_depth, RID p_motion, RID p_output, float p_jitter_x, float p_jitter_y);
+	void _metalfx_temporal_upscale(RID p_scaler, RID p_color, RID p_depth, RID p_motion, RID p_output, float p_jitter_x, float p_jitter_y, bool p_reset);
+	bool _metalfx_is_supported();
 };
 
 VARIANT_ENUM_CAST(RenderingDevice::DeviceType)
@@ -1925,7 +1856,6 @@ VARIANT_ENUM_CAST(RenderingDevice::VertexFrequency)
 VARIANT_ENUM_CAST(RenderingDevice::IndexBufferFormat)
 VARIANT_BITFIELD_CAST(RenderingDevice::StorageBufferUsage)
 VARIANT_BITFIELD_CAST(RenderingDevice::BufferCreationBits)
-VARIANT_BITFIELD_CAST(RenderingDevice::AccelerationStructureGeometryBits)
 VARIANT_ENUM_CAST(RenderingDevice::UniformType)
 VARIANT_ENUM_CAST(RenderingDevice::RenderPrimitive)
 VARIANT_ENUM_CAST(RenderingDevice::PolygonCullMode)

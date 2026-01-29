@@ -497,6 +497,11 @@ public:
 	virtual uint32_t shader_get_layout_hash(ShaderID p_shader) { return 0; }
 	virtual void shader_free(ShaderID p_shader) = 0;
 	virtual void shader_destroy_modules(ShaderID p_shader) = 0;
+	
+	// Metal-specific: Create shader from MSL source (for ray tracing)
+	virtual ShaderID shader_create_from_msl(const String &p_msl_source, const String &p_entry_point) {
+		return ShaderID(); // Not implemented for non-Metal backends
+	}
 
 public:
 	/*********************/
@@ -771,6 +776,33 @@ public:
 			uint32_t p_height,
 			uint32_t p_depth = 1) {}
 
+	// Immediate RT dispatch (creates own command buffer, for testing)
+	virtual void command_trace_rays_immediate(
+			PipelineID p_pipeline,
+			AccelerationStructureID p_accel,
+			TextureID p_output_texture,
+			uint32_t p_width,
+			uint32_t p_height,
+			uint32_t p_depth = 1) {}
+
+	// Extended RT dispatch with additional resource bindings
+	virtual void command_trace_rays_with_resources(
+			PipelineID p_pipeline,
+			AccelerationStructureID p_accel,
+			TextureID p_output_texture,
+			VectorView<BufferID> p_buffers,
+			VectorView<TextureID> p_textures,
+			uint32_t p_width,
+			uint32_t p_height,
+			uint32_t p_depth = 1) {}
+
+	// Plain compute dispatch with texture bindings (no RT)
+	virtual void command_compute_dispatch_msl(
+			PipelineID p_pipeline,
+			VectorView<TextureID> p_textures,
+			uint32_t p_width,
+			uint32_t p_height) {}
+
 	// ----- RAY TRACING PIPELINE -----
 
 	struct RayTracingShaderGroup {
@@ -793,6 +825,33 @@ public:
 			uint32_t p_max_recursion_depth = 1) {
 		return PipelineID();
 	}
+
+	/*******************/
+	/**** METALFX *****/
+	/*******************/
+
+	struct MetalFXDenoiserID {
+		uint64_t id = 0;
+		bool is_valid() const { return id != 0; }
+	};
+
+	virtual bool metalfx_is_supported() { return false; }
+	
+	virtual MetalFXDenoiserID metalfx_denoiser_create(
+			uint32_t p_input_width, uint32_t p_input_height,
+			uint32_t p_output_width, uint32_t p_output_height) {
+		return MetalFXDenoiserID();
+	}
+	
+	virtual void metalfx_denoiser_free(MetalFXDenoiserID p_denoiser) {}
+	
+	virtual void metalfx_denoise(MetalFXDenoiserID p_denoiser, TextureID p_color, 
+			TextureID p_depth, TextureID p_motion, TextureID p_output,
+			float p_jitter_x, float p_jitter_y) {}
+	
+	virtual void metalfx_temporal_upscale(MetalFXDenoiserID p_scaler, TextureID p_color, 
+			TextureID p_depth, TextureID p_motion, TextureID p_output,
+			float p_jitter_x, float p_jitter_y, bool p_reset) {}
 
 	/******************/
 	/**** CALLBACK ****/
