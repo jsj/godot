@@ -34,6 +34,10 @@
 
 class InputEvent;
 class NativeMenu;
+#if defined(RD_ENABLED)
+class RenderingContextDriver;
+class RenderingDevice;
+#endif
 
 class DisplayServerHeadless : public DisplayServer {
 	GDSOFTCLASS(DisplayServerHeadless, DisplayServer);
@@ -41,8 +45,22 @@ class DisplayServerHeadless : public DisplayServer {
 private:
 	friend class DisplayServer;
 
+#if defined(RD_ENABLED)
+	RenderingContextDriver *rendering_context = nullptr;
+	RenderingDevice *rendering_device = nullptr;
+#endif
+	Size2i window_size;
+
 	static Vector<String> get_rendering_drivers_func() {
 		Vector<String> drivers;
+#if defined(RD_ENABLED)
+#if defined(METAL_ENABLED)
+		drivers.push_back("metal");
+#endif
+#if defined(VULKAN_ENABLED)
+		drivers.push_back("vulkan");
+#endif
+#endif
 		drivers.push_back("dummy");
 		return drivers;
 	}
@@ -65,7 +83,7 @@ public:
 	int get_screen_count() const override { return 0; }
 	int get_primary_screen() const override { return 0; }
 	Point2i screen_get_position(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return Point2i(); }
-	Size2i screen_get_size(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return Size2i(); }
+	Size2i screen_get_size(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return window_size; }
 	Rect2i screen_get_usable_rect(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return Rect2i(); }
 	int screen_get_dpi(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return 96; /* 0 might cause issues */ }
 	float screen_get_scale(int p_screen = DisplayServerEnums::SCREEN_OF_MAIN_WINDOW) const override { return 1; }
@@ -115,9 +133,9 @@ public:
 	void window_set_min_size(const Size2i p_size, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
 	Size2i window_get_min_size(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return Size2i(); }
 
-	void window_set_size(const Size2i p_size, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
-	Size2i window_get_size(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return Size2i(); }
-	Size2i window_get_size_with_decorations(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return Size2i(); }
+	void window_set_size(const Size2i p_size, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override { window_size = p_size; }
+	Size2i window_get_size(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return window_size; }
+	Size2i window_get_size_with_decorations(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return window_size; }
 
 	void window_set_mode(DisplayServerEnums::WindowMode p_mode, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
 	DisplayServerEnums::WindowMode window_get_mode(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return DisplayServerEnums::WINDOW_MODE_MINIMIZED; }
@@ -136,9 +154,15 @@ public:
 	void window_move_to_foreground(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
 	bool window_is_focused(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return true; }
 
-	bool window_can_draw(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return false; }
+	bool window_can_draw(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override {
+#if defined(RD_ENABLED)
+		return rendering_device != nullptr;
+#else
+		return false;
+#endif
+	}
 
-	bool can_any_window_draw() const override { return false; }
+	bool can_any_window_draw() const override { return window_can_draw(); }
 
 	void window_set_ime_active(const bool p_active, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
 	void window_set_ime_position(const Point2i &p_pos, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}

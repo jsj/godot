@@ -40,6 +40,9 @@
 #include "servers/rendering/rendering_server_types.h"
 
 void RendererCompositorRD::blit_render_targets_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen *p_render_targets, int p_amount) {
+	if (!RD::get_singleton()->screen_is_prepared(p_screen)) {
+		return;
+	}
 	Error err = RD::get_singleton()->screen_prepare_for_drawing(p_screen);
 	if (err != OK) {
 		// Window is minimized and does not have valid swapchain, skip drawing without printing errors.
@@ -214,6 +217,9 @@ float RendererCompositorRD::_compute_reference_multiplier(RD::ColorSpace p_color
 
 void RendererCompositorRD::set_boot_image_with_stretch(const Ref<Image> &p_image, const Color &p_color, RSE::SplashStretchMode p_stretch_mode, bool p_use_filter) {
 	if (p_image.is_null() || p_image->is_empty()) {
+		return;
+	}
+	if (!RD::get_singleton()->screen_is_prepared(DisplayServerEnums::MAIN_WINDOW_ID)) {
 		return;
 	}
 

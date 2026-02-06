@@ -1675,11 +1675,11 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 				OS::get_singleton()->print("Missing output path after --render-frame, aborting.\n");
 				goto error;
 			}
-			// Don't set editor=true -- we want to run the project's main scene,
-			// not the editor GUI. The main scene will render with the real GPU.
+			// Run the project's main scene (not the editor) with headless display
+			// but a real GPU renderer for offscreen rendering via Metal/Vulkan.
 			cmdline_tool = true;
-			// Mute audio but keep the real display server for Metal/Vulkan rendering.
 			audio_driver = NULL_AUDIO_DRIVER;
+			display_driver = NULL_DISPLAY_DRIVER;
 			main_args.push_back("--render-frame");
 		} else if (arg == "--list-resources") {
 			list_resources = true;
@@ -2705,6 +2705,18 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 			rendering_driver = GLOBAL_GET("rendering/rendering_device/driver");
 			rendering_driver_source = OS::RenderingSource::RENDERING_SOURCE_PROJECT_SETTING;
 		}
+	}
+
+	// Force a real GPU renderer for offscreen --render-frame capture.
+	if (!render_frame_output.is_empty() && (rendering_driver == "dummy" || rendering_method == "dummy" || rendering_method == "gl_compatibility")) {
+#if defined(METAL_ENABLED)
+		rendering_driver = "metal";
+#elif defined(VULKAN_ENABLED)
+		rendering_driver = "vulkan";
+#endif
+		rendering_method = "forward_plus";
+		rendering_driver_source = OS::RenderingSource::RENDERING_SOURCE_COMMANDLINE;
+		rendering_method_source = OS::RenderingSource::RENDERING_SOURCE_COMMANDLINE;
 	}
 
 	// always convert to lower case for consistency in the code
