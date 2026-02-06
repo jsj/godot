@@ -60,6 +60,7 @@ class Main {
 
 public:
 	static bool is_cmdline_tool();
+	static bool is_json_output();
 #ifdef TOOLS_ENABLED
 	enum CLIScope {
 		CLI_SCOPE_TOOL, // Editor and project manager.

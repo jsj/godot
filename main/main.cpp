@@ -70,6 +70,15 @@
 #include "scene/register_scene_types.h"
 #include "scene/resources/packed_scene.h"
 #include "scene/theme/theme_db.h"
+
+#ifdef TOOLS_ENABLED
+#include "core/crypto/crypto_core.h"
+#include "scene/2d/node_2d.h"
+#include "scene/3d/camera_3d.h"
+#include "scene/3d/light_3d.h"
+#include "scene/3d/mesh_instance_3d.h"
+#include "scene/3d/node_3d.h"
+#endif
 #include "servers/audio/audio_driver_dummy.h"
 #include "servers/audio/audio_server.h"
 #include "servers/camera/camera_server.h"
@@ -286,6 +295,10 @@ static bool dump_extension_api = false;
 static bool include_docs_in_extension_api_dump = false;
 static bool validate_extension_api = false;
 static String validate_extension_api_file;
+static String dump_scene_path;
+static String render_frame_output;
+static bool list_resources = false;
+static bool json_output = false;
 #endif
 bool profile_gpu = false;
 
@@ -304,6 +317,14 @@ static const int OPTION_COLUMN_LENGTH = 32;
 
 bool Main::is_cmdline_tool() {
 	return cmdline_tool;
+}
+
+bool Main::is_json_output() {
+#ifdef TOOLS_ENABLED
+	return json_output;
+#else
+	return false;
+#endif
 }
 
 #ifdef TOOLS_ENABLED
@@ -670,6 +691,12 @@ void Main::print_help(const char *p_binary) {
 	print_help_option("", "If incompatibilities or errors are detected, the exit code will be non-zero.\n");
 	print_help_option("--benchmark", "Benchmark the run time and print it to console.\n", CLI_OPTION_AVAILABILITY_EDITOR);
 	print_help_option("--benchmark-file <path>", "Benchmark the run time and save it to a given file in JSON format. The path should be absolute.\n", CLI_OPTION_AVAILABILITY_EDITOR);
+
+	print_help_title("Headless agent tools");
+	print_help_option("--dump-scene <scene>", "Load a scene and dump its node tree as JSON to stdout. Use with --headless.\n", CLI_OPTION_AVAILABILITY_EDITOR);
+	print_help_option("--render-frame <output>", "Render one frame of the main scene and save as PNG. Use \"stdout\" to emit base64-encoded PNG to stdout. Requires forward_plus or mobile renderer.\n", CLI_OPTION_AVAILABILITY_EDITOR);
+	print_help_option("--list-resources", "List all project resources as JSON to stdout. Runs an import scan first.\n", CLI_OPTION_AVAILABILITY_EDITOR);
+	print_help_option("--json", "Emit machine-readable JSON lines for progress, errors, and output.\n", CLI_OPTION_AVAILABILITY_EDITOR);
 #endif // TOOLS_ENABLED
 #ifdef TESTS_ENABLED
 	print_help_option("--test [--help]", "Run unit tests. Use --test --help for more information.\n");
@@ -1626,6 +1653,44 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 			cmdline_tool = true;
 			wait_for_import = true;
 			quit_after = 1;
+		} else if (arg == "--dump-scene") {
+			if (N) {
+				dump_scene_path = N->get();
+				N = N->next();
+			} else {
+				OS::get_singleton()->print("Missing scene path after --dump-scene, aborting.\n");
+				goto error;
+			}
+			editor = true;
+			cmdline_tool = true;
+			wait_for_import = true;
+			audio_driver = NULL_AUDIO_DRIVER;
+			display_driver = NULL_DISPLAY_DRIVER;
+			main_args.push_back("--dump-scene");
+		} else if (arg == "--render-frame") {
+			if (N) {
+				render_frame_output = N->get();
+				N = N->next();
+			} else {
+				OS::get_singleton()->print("Missing output path after --render-frame, aborting.\n");
+				goto error;
+			}
+			// Don't set editor=true -- we want to run the project's main scene,
+			// not the editor GUI. The main scene will render with the real GPU.
+			cmdline_tool = true;
+			// Mute audio but keep the real display server for Metal/Vulkan rendering.
+			audio_driver = NULL_AUDIO_DRIVER;
+			main_args.push_back("--render-frame");
+		} else if (arg == "--list-resources") {
+			list_resources = true;
+			editor = true;
+			cmdline_tool = true;
+			wait_for_import = true;
+			audio_driver = NULL_AUDIO_DRIVER;
+			display_driver = NULL_DISPLAY_DRIVER;
+			main_args.push_back("--list-resources");
+		} else if (arg == "--json") {
+			json_output = true;
 		} else if (arg == "--export-release" || arg == "--export-debug" ||
 				arg == "--export-pack" || arg == "--export-patch") { // Export project
 			// Actually handling is done in start().
@@ -4289,6 +4354,175 @@ int Main::start() {
 		}
 	}
 
+	// Headless agent tools.
+	if (!dump_scene_path.is_empty()) {
+		Ref<PackedScene> scene_res = ResourceLoader::load(dump_scene_path);
+		if (scene_res.is_null()) {
+			if (json_output) {
+				print_line("{\"error\":\"Could not load scene\",\"path\":\"" + dump_scene_path.json_escape() + "\"}");
+			} else {
+				ERR_PRINT("Could not load scene: " + dump_scene_path);
+			}
+			return EXIT_FAILURE;
+		}
+		Node *root = scene_res->instantiate();
+		if (root == nullptr) {
+			if (json_output) {
+				print_line("{\"error\":\"Could not instantiate scene\",\"path\":\"" + dump_scene_path.json_escape() + "\"}");
+			} else {
+				ERR_PRINT("Could not instantiate scene: " + dump_scene_path);
+			}
+			return EXIT_FAILURE;
+		}
+
+		// Iterative JSON dump of scene tree using an explicit stack.
+		struct DumpEntry {
+			Node *node;
+			int depth;
+			int child_idx; // -1 = not yet printed, 0..N = processing children
+		};
+
+		String output;
+		Vector<DumpEntry> stack;
+		stack.push_back({ root, 0, -1 });
+
+		while (stack.size() > 0) {
+			DumpEntry &entry = stack.write[stack.size() - 1];
+
+			if (entry.child_idx == -1) {
+				// Print this node's opening.
+				String indent;
+				for (int i = 0; i < entry.depth; i++) {
+					indent += "  ";
+				}
+				Node *p_node = entry.node;
+				output += indent + "{";
+				output += "\"name\":\"" + String(p_node->get_name()).json_escape() + "\"";
+				output += ",\"type\":\"" + p_node->get_class().json_escape() + "\"";
+
+				Node3D *spatial = Object::cast_to<Node3D>(p_node);
+				if (spatial) {
+					Vector3 o = spatial->get_transform().origin;
+					output += ",\"transform\":{\"origin\":[" + String::num(o.x, 4) + "," + String::num(o.y, 4) + "," + String::num(o.z, 4) + "]}";
+				}
+
+				Node2D *node2d = Object::cast_to<Node2D>(p_node);
+				if (node2d) {
+					Vector2 pos = node2d->get_position();
+					output += ",\"position\":[" + String::num(pos.x, 4) + "," + String::num(pos.y, 4) + "]";
+				}
+
+				MeshInstance3D *mesh_inst = Object::cast_to<MeshInstance3D>(p_node);
+				if (mesh_inst && mesh_inst->get_mesh().is_valid()) {
+					output += ",\"mesh\":\"" + mesh_inst->get_mesh()->get_class().json_escape() + "\"";
+				}
+
+				Light3D *light = Object::cast_to<Light3D>(p_node);
+				if (light) {
+					output += ",\"light_energy\":" + String::num(light->get_param(Light3D::PARAM_ENERGY), 4);
+				}
+
+				Camera3D *camera = Object::cast_to<Camera3D>(p_node);
+				if (camera) {
+					output += ",\"fov\":" + String::num(camera->get_fov(), 4);
+				}
+
+				if (p_node->get_child_count() > 0) {
+					output += ",\"children\":[\n";
+					entry.child_idx = 0;
+				} else {
+					output += "}";
+					stack.resize(stack.size() - 1);
+				}
+			} else if (entry.child_idx < entry.node->get_child_count()) {
+				// Push next child.
+				if (entry.child_idx > 0) {
+					output += ",\n";
+				}
+				Node *child = entry.node->get_child(entry.child_idx);
+				entry.child_idx++;
+				stack.push_back({ child, entry.depth + 1, -1 });
+			} else {
+				// All children done, close this node.
+				String indent;
+				for (int i = 0; i < entry.depth; i++) {
+					indent += "  ";
+				}
+				output += "\n" + indent + "]}";
+				stack.resize(stack.size() - 1);
+			}
+		}
+
+		print_line(output);
+		memdelete(root);
+		return EXIT_SUCCESS;
+	}
+
+	if (list_resources) {
+		// Scan filesystem and output all resources as JSON.
+		String project_path_str = ProjectSettings::get_singleton()->get_resource_path();
+
+		// Use a stack-based directory scan.
+		Vector<String> files;
+		Vector<String> dir_stack;
+		dir_stack.push_back("");
+
+		while (dir_stack.size() > 0) {
+			String current = dir_stack[dir_stack.size() - 1];
+			dir_stack.resize(dir_stack.size() - 1);
+
+			String full_dir = current.is_empty() ? project_path_str : project_path_str.path_join(current);
+			Ref<DirAccess> da = DirAccess::open(full_dir);
+			if (da.is_null()) {
+				continue;
+			}
+
+			da->list_dir_begin();
+			String f = da->get_next();
+			while (!f.is_empty()) {
+				if (f == "." || f == ".." || f == ".godot") {
+					f = da->get_next();
+					continue;
+				}
+				String rel_path = current.is_empty() ? f : current + "/" + f;
+				if (da->current_is_dir()) {
+					dir_stack.push_back(rel_path);
+				} else {
+					files.push_back(rel_path);
+				}
+				f = da->get_next();
+			}
+			da->list_dir_end();
+		}
+
+		files.sort();
+
+		String json = "[\n";
+		for (int i = 0; i < files.size(); i++) {
+			String f = files[i];
+			String res_path = "res://" + f;
+			String type = ResourceLoader::get_resource_type(res_path);
+			bool is_import = f.ends_with(".import");
+			if (i > 0) {
+				json += ",\n";
+			}
+			json += "  {\"path\":\"" + res_path.json_escape() + "\"";
+			if (!type.is_empty()) {
+				json += ",\"type\":\"" + type.json_escape() + "\"";
+			}
+			json += ",\"import\":" + String(is_import ? "true" : "false");
+			json += "}";
+		}
+		json += "\n]";
+		print_line(json);
+		return EXIT_SUCCESS;
+	}
+
+	if (!render_frame_output.is_empty()) {
+		// Rendering needs the main scene loaded and a few frames processed.
+		// We fall through so the scene tree gets set up; capture happens in iteration().
+	}
+
 #ifndef DISABLE_DEPRECATED
 	if (converting_project) {
 		int ret = ProjectConverter3To4(converter_max_kb_file, converter_max_line_length).convert();
@@ -5135,6 +5369,57 @@ bool Main::iteration() {
 		GodotProfileZoneGrouped(_profile_zone, "movie_writer->add_frame");
 		movie_writer->add_frame();
 	}
+
+#ifdef TOOLS_ENABLED
+	// Headless render-frame capture: grab viewport after a few frames for GPU to settle.
+	if (!render_frame_output.is_empty() && Engine::get_singleton()->_process_frames >= 3) {
+		bool captured = false;
+		SceneTree *st = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
+		if (st && st->get_root()) {
+			Ref<ViewportTexture> vp_tex = st->get_root()->get_texture();
+			if (vp_tex.is_valid()) {
+				RID tex_rid = vp_tex->get_rid();
+				Ref<Image> img = RenderingServer::get_singleton()->texture_2d_get(tex_rid);
+				if (img.is_valid() && img->get_width() > 0 && img->get_height() > 0) {
+					if (render_frame_output == "stdout") {
+						Vector<uint8_t> png_buf = img->save_png_to_buffer();
+						String b64 = CryptoCore::b64_encode_str(png_buf.ptr(), png_buf.size());
+						print_line("data:image/png;base64," + b64);
+					} else {
+						Error err = img->save_png(render_frame_output);
+						if (err != OK) {
+							ERR_PRINT("Failed to save render frame to: " + render_frame_output);
+							OS::get_singleton()->set_exit_code(EXIT_FAILURE);
+						} else {
+							if (json_output) {
+								print_line("{\"render_frame\":\"" + render_frame_output.json_escape() + "\",\"width\":" + itos(img->get_width()) + ",\"height\":" + itos(img->get_height()) + "}");
+							} else {
+								print_line("Render frame saved: " + render_frame_output + " (" + itos(img->get_width()) + "x" + itos(img->get_height()) + ")");
+							}
+						}
+					}
+					captured = true;
+				}
+			}
+		}
+
+		// If using dummy rasterizer (gl_compatibility + headless), rendering produces no pixels.
+		// After 10 frames, give up and report the issue.
+		if (!captured && Engine::get_singleton()->_process_frames >= 10) {
+			if (json_output) {
+				print_line("{\"error\":\"render_frame failed: dummy rasterizer produces no pixels. Use rendering_method=forward_plus in project.godot for headless rendering.\"}");
+			} else {
+				ERR_PRINT("Render frame failed: the dummy rasterizer (gl_compatibility + headless) cannot produce pixels. Set rendering/renderer/rendering_method=\"forward_plus\" in project.godot.");
+			}
+			render_frame_output = "";
+			OS::get_singleton()->set_exit_code(EXIT_FAILURE);
+			exit = true;
+		} else if (captured) {
+			render_frame_output = "";
+			exit = true;
+		}
+	}
+#endif
 
 #ifdef TOOLS_ENABLED
 	bool quit_after_timeout = false;

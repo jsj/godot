@@ -49,6 +49,7 @@
 #include "editor/script/script_editor_plugin.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/settings/project_settings_editor.h"
+#include "main/main.h"
 #include "scene/main/scene_tree.h"
 #include "scene/resources/packed_scene.h"
 #include "servers/display/display_server.h"
@@ -2925,6 +2926,11 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 	List<String> gen_files;
 	Variant meta;
 	Error err = importer->import(uid, p_file, base_path, params, &import_variants, &gen_files, &meta);
+
+	if (err != OK && Main::is_cmdline_tool()) {
+		ERR_PRINT(vformat("Import failed for \"%s\" with error %d.", p_file, (int)err));
+		OS::get_singleton()->set_exit_code(EXIT_FAILURE);
+	}
 
 	// As import is complete, save the .import file.
 
