@@ -35,22 +35,105 @@
 
 #include "servers/rendering/dummy/rasterizer_dummy.h"
 
+#if defined(RD_ENABLED)
+#include "servers/rendering/renderer_rd/renderer_compositor_rd.h"
+#include "servers/rendering/rendering_device.h"
+
+#if defined(METAL_ENABLED)
+#include "drivers/metal/rendering_context_driver_metal.h"
+#endif
+#if defined(VULKAN_ENABLED)
+#if defined(MACOS_ENABLED)
+#include "platform/macos/rendering_context_driver_vulkan_macos.h"
+#elif defined(LINUXBSD_ENABLED)
+#include "platform/linuxbsd/rendering_context_driver_vulkan_linuxbsd.h"
+#elif defined(WINDOWS_ENABLED)
+#include "platform/windows/rendering_context_driver_vulkan_windows.h"
+#endif
+#endif // VULKAN_ENABLED
+#endif // RD_ENABLED
+
 class DisplayServerHeadless : public DisplayServer {
 	GDSOFTCLASS(DisplayServerHeadless, DisplayServer);
 
 private:
 	friend class DisplayServer;
 
+#if defined(RD_ENABLED)
+	RenderingContextDriver *rendering_context = nullptr;
+	RenderingDevice *rendering_device = nullptr;
+#endif
+
 	static Vector<String> get_rendering_drivers_func() {
 		Vector<String> drivers;
+#if defined(RD_ENABLED)
+#if defined(METAL_ENABLED)
+		drivers.push_back("metal");
+#endif
+#if defined(VULKAN_ENABLED)
+		drivers.push_back("vulkan");
+#endif
+#endif
 		drivers.push_back("dummy");
 		return drivers;
 	}
 
 	static DisplayServer *create_func(const String &p_rendering_driver, DisplayServer::WindowMode p_mode, DisplayServer::VSyncMode p_vsync_mode, uint32_t p_flags, const Vector2i *p_position, const Vector2i &p_resolution, int p_screen, Context p_context, int64_t p_parent_window, Error &r_error) {
 		r_error = OK;
-		RasterizerDummy::make_current();
-		return memnew(DisplayServerHeadless());
+
+		DisplayServerHeadless *ds = memnew(DisplayServerHeadless());
+		ds->window_size = p_resolution;
+
+#if defined(RD_ENABLED)
+		if (p_rendering_driver != "dummy") {
+			bool rd_initialized = false;
+
+#if defined(METAL_ENABLED)
+			if (p_rendering_driver == "metal") {
+				ds->rendering_context = memnew(RenderingContextDriverMetal);
+			}
+#endif
+#if defined(VULKAN_ENABLED)
+			if (p_rendering_driver == "vulkan") {
+#if defined(MACOS_ENABLED)
+				ds->rendering_context = memnew(RenderingContextDriverVulkanMacOS);
+#elif defined(LINUXBSD_ENABLED)
+				ds->rendering_context = memnew(RenderingContextDriverVulkanLinuxBSD);
+#elif defined(WINDOWS_ENABLED)
+				ds->rendering_context = memnew(RenderingContextDriverVulkanWindows);
+#endif
+			}
+#endif
+
+			if (ds->rendering_context) {
+				if (ds->rendering_context->initialize() == OK) {
+					ds->rendering_device = memnew(RenderingDevice);
+					// Pass INVALID_WINDOW_ID -- no window surface needed.
+					if (ds->rendering_device->initialize(ds->rendering_context, DisplayServer::INVALID_WINDOW_ID) == OK) {
+						RendererCompositorRD::make_current();
+						rd_initialized = true;
+					} else {
+						memdelete(ds->rendering_device);
+						ds->rendering_device = nullptr;
+					}
+				}
+				if (!rd_initialized && ds->rendering_context) {
+					memdelete(ds->rendering_context);
+					ds->rendering_context = nullptr;
+				}
+			}
+
+			if (!rd_initialized) {
+				WARN_PRINT("Headless: Could not initialize rendering device, falling back to dummy rasterizer.");
+				RasterizerDummy::make_current();
+			}
+		} else
+#endif
+		{
+			RasterizerDummy::make_current();
+		}
+
+		return ds;
 	}
 
 	static void _dispatch_input_events(const Ref<InputEvent> &p_event) {
@@ -65,6 +148,7 @@ private:
 
 	NativeMenu *native_menu = nullptr;
 	Callable input_event_callback;
+	Size2i window_size;
 
 public:
 	bool has_feature(Feature p_feature) const override { return false; }
@@ -76,7 +160,7 @@ public:
 	int get_screen_count() const override { return 0; }
 	int get_primary_screen() const override { return 0; }
 	Point2i screen_get_position(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return Point2i(); }
-	Size2i screen_get_size(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return Size2i(); }
+	Size2i screen_get_size(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return window_size; }
 	Rect2i screen_get_usable_rect(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return Rect2i(); }
 	int screen_get_dpi(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return 96; /* 0 might cause issues */ }
 	float screen_get_scale(int p_screen = SCREEN_OF_MAIN_WINDOW) const override { return 1; }
@@ -126,9 +210,9 @@ public:
 	void window_set_min_size(const Size2i p_size, WindowID p_window = MAIN_WINDOW_ID) override {}
 	Size2i window_get_min_size(WindowID p_window = MAIN_WINDOW_ID) const override { return Size2i(); }
 
-	void window_set_size(const Size2i p_size, WindowID p_window = MAIN_WINDOW_ID) override {}
-	Size2i window_get_size(WindowID p_window = MAIN_WINDOW_ID) const override { return Size2i(); }
-	Size2i window_get_size_with_decorations(WindowID p_window = MAIN_WINDOW_ID) const override { return Size2i(); }
+	void window_set_size(const Size2i p_size, WindowID p_window = MAIN_WINDOW_ID) override { window_size = p_size; }
+	Size2i window_get_size(WindowID p_window = MAIN_WINDOW_ID) const override { return window_size; }
+	Size2i window_get_size_with_decorations(WindowID p_window = MAIN_WINDOW_ID) const override { return window_size; }
 
 	void window_set_mode(WindowMode p_mode, WindowID p_window = MAIN_WINDOW_ID) override {}
 	WindowMode window_get_mode(WindowID p_window = MAIN_WINDOW_ID) const override { return WINDOW_MODE_MINIMIZED; }
@@ -145,9 +229,21 @@ public:
 	void window_move_to_foreground(WindowID p_window = MAIN_WINDOW_ID) override {}
 	bool window_is_focused(WindowID p_window = MAIN_WINDOW_ID) const override { return true; }
 
-	bool window_can_draw(WindowID p_window = MAIN_WINDOW_ID) const override { return false; }
+	bool window_can_draw(WindowID p_window = MAIN_WINDOW_ID) const override {
+#if defined(RD_ENABLED)
+		return rendering_device != nullptr;
+#else
+		return false;
+#endif
+	}
 
-	bool can_any_window_draw() const override { return false; }
+	bool can_any_window_draw() const override {
+#if defined(RD_ENABLED)
+		return rendering_device != nullptr;
+#else
+		return false;
+#endif
+	}
 
 	void window_set_ime_active(const bool p_active, WindowID p_window = MAIN_WINDOW_ID) override {}
 	void window_set_ime_position(const Point2i &p_pos, WindowID p_window = MAIN_WINDOW_ID) override {}
@@ -204,6 +300,16 @@ public:
 	}
 
 	~DisplayServerHeadless() {
+#if defined(RD_ENABLED)
+		if (rendering_device) {
+			memdelete(rendering_device);
+			rendering_device = nullptr;
+		}
+		if (rendering_context) {
+			memdelete(rendering_context);
+			rendering_context = nullptr;
+		}
+#endif
 		if (native_menu) {
 			memdelete(native_menu);
 			native_menu = nullptr;
