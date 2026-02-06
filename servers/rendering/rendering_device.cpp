@@ -4735,6 +4735,10 @@ Error RenderingDevice::screen_create(DisplayServer::WindowID p_screen) {
 	return OK;
 }
 
+bool RenderingDevice::screen_is_prepared(DisplayServer::WindowID p_screen) const {
+	return screen_swap_chains.has(p_screen);
+}
+
 Error RenderingDevice::screen_prepare_for_drawing(DisplayServer::WindowID p_screen) {
 	_THREAD_SAFE_METHOD_
 
