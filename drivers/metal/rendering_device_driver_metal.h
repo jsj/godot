@@ -32,6 +32,7 @@
 
 #include "metal_device_profile.h"
 #include "metal_objects_shared.h"
+#include "metal_raytracing.h"
 
 #include "servers/rendering/rendering_device_driver.h"
 

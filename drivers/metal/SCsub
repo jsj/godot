@@ -57,6 +57,7 @@ env_metal.Append(CCFLAGS=["-fmodules", "-fcxx-modules"])
 driver_obj = []
 
 env_metal.add_source_files(driver_obj, "*.cpp")
+env_metal.add_source_files(driver_obj, "*.mm")
 env.drivers_sources += driver_obj
 
 # Needed to force rebuilding the driver files when the thirdparty library is updated.
