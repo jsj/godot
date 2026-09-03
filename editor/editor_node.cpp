@@ -235,7 +235,7 @@ constexpr int LARGE_RESOURCE_WARNING_SIZE_THRESHOLD = 512'000; // 500 KB
 
 bool EditorProgress::step(const String &p_state, int p_step, bool p_force_refresh) {
 	if (Main::is_json_output() && Main::is_cmdline_tool()) {
-		print_line("{\"type\":\"progress\",\"task\":\"" + task.json_escape() + "\",\"step\":" + itos(p_step) + ",\"state\":\"" + p_state.json_escape() + "\"}");
+		Main::print_json_line("{\"type\":\"progress.update\",\"data\":{\"task\":\"" + task.json_escape() + "\",\"step\":" + itos(p_step) + ",\"state\":\"" + p_state.json_escape() + "\"}}");
 		return false;
 	}
 	if (!force_background && Thread::is_main_thread()) {
@@ -248,7 +248,7 @@ bool EditorProgress::step(const String &p_state, int p_step, bool p_force_refres
 
 EditorProgress::EditorProgress(const String &p_task, const String &p_label, int p_amount, bool p_can_cancel, bool p_force_background) {
 	if (Main::is_json_output() && Main::is_cmdline_tool()) {
-		print_line("{\"type\":\"progress_start\",\"task\":\"" + p_task.json_escape() + "\",\"label\":\"" + p_label.json_escape() + "\",\"amount\":" + itos(p_amount) + "}");
+		Main::print_json_line("{\"type\":\"progress.start\",\"data\":{\"task\":\"" + p_task.json_escape() + "\",\"label\":\"" + p_label.json_escape() + "\",\"amount\":" + itos(p_amount) + "}}");
 	}
 	if (!p_force_background && Thread::is_main_thread()) {
 		EditorNode::progress_add_task(p_task, p_label, p_amount, p_can_cancel);
@@ -261,7 +261,7 @@ EditorProgress::EditorProgress(const String &p_task, const String &p_label, int 
 
 EditorProgress::~EditorProgress() {
 	if (Main::is_json_output() && Main::is_cmdline_tool()) {
-		print_line("{\"type\":\"progress_end\",\"task\":\"" + task.json_escape() + "\"}");
+		Main::print_json_line("{\"type\":\"progress.end\",\"data\":{\"task\":\"" + task.json_escape() + "\"}}");
 	}
 	if (!force_background && Thread::is_main_thread()) {
 		EditorNode::progress_end_task(task);

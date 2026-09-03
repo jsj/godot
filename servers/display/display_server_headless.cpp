@@ -90,7 +90,7 @@ DisplayServer *DisplayServerHeadless::create_func(const String &p_rendering_driv
 			memdelete(display_server->rendering_context);
 			display_server->rendering_context = nullptr;
 		}
-		WARN_PRINT("Headless rendering device initialization failed. Godot will use the dummy renderer.");
+		WARN_PRINT("Godot did not initialize the headless rendering device. Godot will use the dummy renderer.");
 	}
 #endif
 

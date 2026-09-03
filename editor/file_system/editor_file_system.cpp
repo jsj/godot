@@ -2928,7 +2928,11 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 	Error err = importer->import(uid, p_file, base_path, params, &import_variants, &gen_files, &meta);
 
 	if (err != OK && Main::is_cmdline_tool()) {
-		ERR_PRINT(vformat("Import failed for \"%s\" with error %d.", p_file, (int)err));
+		if (Main::is_json_output()) {
+			Main::print_json_line("{\"type\":\"error\",\"data\":{\"code\":\"resource_import_failed\",\"message\":\"Godot did not import the resource.\",\"path\":\"" + p_file.json_escape() + "\",\"error_code\":" + itos((int)err) + "}}");
+		} else {
+			ERR_PRINT(vformat("Godot did not import the resource \"%s\". Error code: %d.", p_file, (int)err));
+		}
 		OS::get_singleton()->set_exit_code(EXIT_FAILURE);
 	}
 
