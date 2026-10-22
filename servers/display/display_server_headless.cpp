@@ -46,7 +46,7 @@
 #if defined(MACOS_ENABLED)
 #include "platform/macos/rendering_context_driver_vulkan_macos.h"
 #elif defined(LINUXBSD_ENABLED)
-#include "platform/linuxbsd/rendering_context_driver_vulkan_linuxbsd.h"
+#include "drivers/vulkan/rendering_context_driver_vulkan.h"
 #elif defined(WINDOWS_ENABLED)
 #include "platform/windows/rendering_context_driver_vulkan_windows.h"
 #endif
@@ -70,7 +70,7 @@ DisplayServer *DisplayServerHeadless::create_func(const String &p_rendering_driv
 #if defined(MACOS_ENABLED)
 			display_server->rendering_context = memnew(RenderingContextDriverVulkanMacOS);
 #elif defined(LINUXBSD_ENABLED)
-			display_server->rendering_context = memnew(RenderingContextDriverVulkanLinuxBSD);
+			display_server->rendering_context = memnew(RenderingContextDriverVulkan);
 #elif defined(WINDOWS_ENABLED)
 			display_server->rendering_context = memnew(RenderingContextDriverVulkanWindows);
 #endif
