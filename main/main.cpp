@@ -2754,6 +2754,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		}
 	}
 
+#ifdef TOOLS_ENABLED
 	// Force a real GPU renderer for offscreen --render-frame capture.
 	if (!render_frame_output.is_empty() && (rendering_driver == "dummy" || rendering_method == "dummy" || rendering_method == "gl_compatibility")) {
 #if defined(METAL_ENABLED)
@@ -2765,6 +2766,8 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		rendering_driver_source = OS::RenderingSource::RENDERING_SOURCE_COMMANDLINE;
 		rendering_method_source = OS::RenderingSource::RENDERING_SOURCE_COMMANDLINE;
 	}
+
+#endif // TOOLS_ENABLED
 
 	// always convert to lower case for consistency in the code
 	rendering_driver = rendering_driver.to_lower();
